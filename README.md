@@ -31,9 +31,11 @@ decoded-chunk cache sized for the "same few locations, again and again" access p
 | Chunk keys | v2 `.`/`/` separators; v3 `default` and `v2` encodings |
 | Not supported | writing, irregular chunk grids, variable-length types, complex numbers |
 
-Every codec path is tested against files written by the reference `zarr-python`
-(73 fixtures; see `internal/gen/gen.py`), including hand-picked edge cases: partial edge chunks,
-missing chunks (fill value), NaN fills, odd blosc block sizes, nested shards, big-endian data.
+During development every codec path was checked against 73 files written by the reference
+`zarr-python`, including edge cases: partial edge chunks, missing chunks (fill value), NaN fills,
+odd blosc block sizes, nested shards, big-endian data. Those files are not in this repository; the
+interop tests skip when `testdata/` is absent. To check your own data, set `GOZARR_ARRAY`
+(see Development).
 
 ## Speed
 
@@ -101,9 +103,9 @@ A native GCS/S3 `Store` fits in about 40 lines and can live in your own package;
 ## Development
 
 ```sh
-pip install zarr numcodecs numpy
-make fixtures   # writes ./testdata with the reference implementation (not committed)
 make test race bench
+# Check an array of your own: reads it whole and point by point and compares the two.
+GOZARR_ARRAY=/path/to/store.zarr:array/path go test -run TestOwnArray -v .
 ```
 
 ## Licence

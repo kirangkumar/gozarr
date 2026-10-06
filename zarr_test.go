@@ -33,7 +33,7 @@ func loadExpected(t testing.TB) map[string]expectation {
 		expErr = json.Unmarshal(b, &expData)
 	})
 	if expErr != nil {
-		t.Skip("fixtures missing; run: python internal/gen/gen.py (needs zarr, numcodecs, numpy): ", expErr)
+		t.Skip("interop fixtures not present (testdata/): ", expErr)
 	}
 	return expData
 }
@@ -167,6 +167,98 @@ func TestSlices(t *testing.T) {
 		for j, v := range d.Float64() {
 			if !same(v, c.Flat[j]) {
 				t.Fatalf("%d %s %v: elem %d got %v want %v", i, c.Name, c.Sel, j, v, deref(c.Flat[j]))
+			}
+		}
+	}
+}
+
+// TestOwnArray is a self-consistency check for data you supply:
+//
+//	GOZARR_ARRAY=/path/to/store.zarr:path/to/array go test -run TestOwnArray -v .
+//
+// It reads the array in full (capped at 64 Mi elements), then re-reads random
+// points and windows through the point and slice paths and requires identical values.
+func TestOwnArray(t *testing.T) {
+	spec := os.Getenv("GOZARR_ARRAY")
+	if spec == "" {
+		t.Skip("set GOZARR_ARRAY=<store>[:<array path>]")
+	}
+	loc, path, _ := strings.Cut(spec, ":")
+	if strings.HasPrefix(loc, "http") { // URLs contain ':'; split on the last one after the scheme
+		i := strings.LastIndex(spec, ":")
+		if i > strings.Index(spec, "://")+2 {
+			loc, path = spec[:i], spec[i+1:]
+		} else {
+			loc, path = spec, ""
+		}
+	}
+	store, err := NewStore(loc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	a, err := Open(ctx, store, path, WithCache(NewCache(256<<20)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	shape := a.Shape()
+	t.Logf("v%d %v %s chunks=%v", a.Version(), shape, a.DType(), a.ChunkShape())
+	n := prod(shape)
+	if n > 64<<20 {
+		t.Skipf("%d elements is too many for a full read", n)
+	}
+	full, err := a.Read(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vals := full.Float64()
+	rng := uint64(88172645463325252)
+	next := func(m int) int {
+		rng ^= rng << 13
+		rng ^= rng >> 7
+		rng ^= rng << 17
+		return int(rng % uint64(m))
+	}
+	for k := 0; k < 2000; k++ {
+		idx := make([]int, len(shape))
+		flat := 0
+		for i := range shape {
+			idx[i] = next(shape[i])
+			flat = flat*shape[i] + idx[i]
+		}
+		v, err := a.At(ctx, idx...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v != vals[flat] && !(math.IsNaN(v) && math.IsNaN(vals[flat])) {
+			t.Fatalf("At%v = %v but full read has %v", idx, v, vals[flat])
+		}
+	}
+	for k := 0; k < 50; k++ {
+		sel := make([]Slice, len(shape))
+		for i := range shape {
+			lo := next(shape[i])
+			hi := lo + 1 + next(shape[i]-lo)
+			sel[i] = Slice{lo, hi, 1 + next(3)}
+		}
+		d, err := a.Read(ctx, sel...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := d.Float64()
+		idx := make([]int, len(shape))
+		for j, v := range got {
+			rem := j
+			flat := 0
+			for i := len(shape) - 1; i >= 0; i-- {
+				idx[i] = sel[i].Start + (rem%d.Shape[i])*sel[i].Step
+				rem /= d.Shape[i]
+			}
+			for i := range shape {
+				flat = flat*shape[i] + idx[i]
+			}
+			if v != vals[flat] && !(math.IsNaN(v) && math.IsNaN(vals[flat])) {
+				t.Fatalf("window %+v element %v = %v, full read has %v", sel, idx, v, vals[flat])
 			}
 		}
 	}

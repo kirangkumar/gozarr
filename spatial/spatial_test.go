@@ -15,7 +15,7 @@ func fixtures(t testing.TB) map[string]struct {
 } {
 	b, err := os.ReadFile("../testdata/expected.json")
 	if err != nil {
-		t.Skip("fixtures missing; run python internal/gen/gen.py")
+		t.Skip("interop fixtures not present (testdata/)")
 	}
 	var m map[string]struct {
 		Flat []*float64 `json:"flat"`
